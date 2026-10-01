@@ -28,10 +28,16 @@ TARGET.CURRENT_MEMBER_RECORDS
 The assessment also requires:
 
 ```text
-redemption JSON -> flattened redemptions -> member profile join
+RAW.REDEMPTION_FEEDS (VARIANT)
+        |
+        v
+TARGET.REDEMPTIONS
+        |
+        v
+TARGET.REDEMPTIONS_WITH_MEMBER
 ```
 
-That redemption path is deliberately deferred until the actual JSON feed is supplied.
+The redemption source contract is supplied by the assessment specification.
 
 ## Technology
 
@@ -50,6 +56,18 @@ A unified landing table for the three observed member feeds. Source date values 
 Contains typed dates, source-quality flags, `age`, and `stale_member`. The technical `member_key` is `source_country:source_member_id` because numeric IDs repeat across country files.
 
 `TARGET.CURRENT_MEMBER_RECORDS` contains one selected row per `source_member_id`. The country target tables are populated only from this current-state table.
+
+### `RAW.REDEMPTION_FEEDS`
+
+Stores each source payload as `VARIANT`, alongside `raw_payload_text`, `batch_id`, source filename, and load timestamp. Keeping the original text means malformed JSON is still available for investigation.
+
+### `TARGET.REDEMPTIONS`
+
+Stores one relational row per element of the JSON `redemptions` array. Dates are typed as `DATE`, and miles are typed as `NUMBER`.
+
+### `TARGET.REDEMPTIONS_WITH_MEMBER`
+
+A left-join view over `TARGET.REDEMPTIONS` and the existing `TARGET.CURRENT_MEMBER_RECORDS`. The left join preserves orphan transactions while enriching known members with name, country, and tier.
 
 ## Transformation Logic
 
@@ -79,6 +97,42 @@ Equal flight dates are ordered by `load_timestamp`, then `source_file`, `source_
 
 The source files repeat IDs across countries, so this phase assumes the repeated numeric ID represents the same business member for the assessment's movement scenario. That assumption is visible in `sql/05_member_transformation.sql` and must be revisited if a global member identifier is supplied.
 
+## Redemption JSON Processing
+
+The assessment contract is:
+
+```json
+{
+        "member_id": "223457",
+        "feed_date": "20240115",
+        "redemptions": [
+                {
+                        "txn_id": "RX10091",
+                        "txn_date": "20240110",
+                        "partner": "AeroLink",
+                        "miles_redeemed": 12000,
+                        "status": "COMPLETED"
+                }
+        ]
+}
+```
+
+`sql/06_redemption_flattening.sql` uses `LATERAL FLATTEN` on `raw_payload:redemptions`, producing one typed row per transaction. `feed_date` and `txn_date` are parsed from `YYYYMMDD` into Snowflake `DATE` values. The raw `VARIANT` and original text are retained so the relational projection can be rebuilt after a parsing or schema issue.
+
+Example query:
+
+```sql
+SELECT member_id, member_name, country, tier,
+                         txn_id, txn_date, partner, miles_redeemed, status
+FROM TARGET.REDEMPTIONS_WITH_MEMBER
+WHERE member_id = '223457'
+ORDER BY txn_date;
+```
+
+Orphan transactions are not deleted. The left join returns null profile columns, and `sql/07_validations.sql` reports them explicitly.
+
+The assessment also describes flat files with `H|` header and `D|` detail records. The raw member contract supports `source_record_type`; ingestion must retain the marker, skip `H` rows, and load only `D` rows as members. The existing CSV/XLSX samples do not contain those markers.
+
 ## Data Quality
 
 `sql/07_validations.sql` returns diagnostic rows for:
@@ -102,7 +156,10 @@ Run the SQL scripts in this order:
 3. `sql/03_staging_ddl.sql`
 4. Load the supplied files into `RAW.MEMBER_RECORDS`, mapping country and source metadata while preserving source text.
 5. `sql/04_load_staging.sql`
-6. `sql/07_validations.sql`
+6. `sql/05_member_transformation.sql`
+7. Load redemption JSON into `RAW.REDEMPTION_FEEDS` using `TRY_PARSE_JSON` while retaining source text.
+8. `sql/06_redemption_flattening.sql`
+9. `sql/07_validations.sql`
 
 The raw load step is intentionally kept separate because the inputs use CSV and XLSX formats with different headers and no Snowflake stage or credentials were supplied.
 
@@ -114,7 +171,7 @@ From the repository root:
 C:/Python39/python.exe -m pytest -q
 ```
 
-The tests cover birthday-aware age, the strict stale threshold, null/future flights, source date formats, duplicate detection, mandatory fields, invalid dates, and country validation.
+The tests cover birthday-aware age, the strict stale threshold, null/future flights, source date formats, duplicate detection, mandatory fields, invalid dates, country validation, redemption-array flattening, date/numeric conversion, required fields, orphan detection, duplicate transactions, and member enrichment.
 
 ## Assumptions
 
@@ -123,13 +180,21 @@ The tests cover birthday-aware age, the strict stale threshold, null/future flig
 - The assessment's required DOB field is treated as mandatory, so USA rows are surfaced as data-quality failures because their source has no DOB column.
 - The calculation date is Snowflake `CURRENT_DATE()` in the staging build.
 - Invalid and missing dates remain visible through raw columns and staging validity flags.
+- The assessment's redemption member IDs are six digits, while the supplied earlier member sample uses IDs `1` to `3`; the format validation reports unexpected values without changing them.
 
 ## Design Decisions
 
 A single unified raw table was selected over one raw table per country because the feeds represent the same business entity with schema drift. Separate raw tables would preserve headers more literally but would duplicate downstream logic. Keeping source text in the unified table preserves auditability while allowing one staging contract.
 
-Snowflake SQL remains the primary implementation because the assessment is Snowflake-focused. Python is limited to small reference functions that make date-boundary behavior testable without duplicating the pipeline.
+Snowflake SQL remains the primary implementation because the assessment is Snowflake-focused. Python is limited to small reference functions that make date-boundary and JSON flattening behavior testable without duplicating the production SQL.
 
-## Deferred Work
+## Scaling to Billions of Daily Records
 
-The next phase should establish a defensible global member identity, implement deterministic latest-record-wins handling, and create country-specific target tables. A later phase can flatten the missing redemption JSON after its actual structure is provided.
+- Land files in cloud storage and use `COPY INTO` or Snowpipe rather than row-by-row inserts. Store a stable `batch_id`, source filename, and load timestamp for replay and traceability.
+- Keep RAW append-only and process only new batches into STAGING/TARGET. Use batch-scoped `MERGE` or deterministic delete/insert patterns for idempotent retries.
+- Let Snowflake micro-partition naturally; add clustering only after query history proves pruning is inadequate, for example for sustained filtering by `member_id` or `txn_date`. Clustering is not automatically beneficial for every table.
+- Flatten JSON once into typed relational columns, then query the relational target rather than repeatedly traversing VARIANT at runtime.
+- Size or suspend/resume warehouses according to batch volume, and separate ingestion, transformation, and interactive workloads where needed.
+- Monitor row counts, rejected/malformed payloads, duplicate transaction IDs, orphan rates, and batch latency. Quarantine failed batches and retry from immutable RAW data.
+- Use incremental tasks or orchestration with success markers so a completed batch is not processed twice.
+

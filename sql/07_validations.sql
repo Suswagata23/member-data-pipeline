@@ -135,3 +135,69 @@ FROM (
 ) t
 LEFT JOIN TARGET.CURRENT_MEMBER_RECORDS c ON c.member_id = t.member_id
 WHERE c.member_id IS NULL;
+
+-- 15. The assessment flat-file format can contain H| header rows and D| detail
+-- rows. Headers are metadata, never member records.
+SELECT 'HEADER_LOADED_AS_MEMBER' AS check_name, source_file, source_row_number, source_member_id
+FROM RAW.MEMBER_RECORDS
+WHERE source_record_type = 'H';
+
+-- 16. Assessment member IDs are expected to be six digits. The source value is
+-- preserved; this query only identifies values such as 22345 and 2256.
+SELECT 'UNEXPECTED_MEMBER_ID_FORMAT' AS check_name, member_id
+FROM TARGET.CURRENT_MEMBER_RECORDS
+WHERE NOT REGEXP_LIKE(member_id, '^[0-9]{6}$');
+
+-- 17. Malformed JSON remains queryable through raw_payload_text.
+SELECT 'MALFORMED_REDEMPTION_JSON' AS check_name, batch_id, source_file, raw_payload_text
+FROM RAW.REDEMPTION_FEEDS
+WHERE raw_payload IS NULL;
+
+-- 18. Required redemption fields and typed conversion checks.
+SELECT 'MISSING_REDEMPTION_MEMBER_ID' AS check_name, batch_id, txn_id
+FROM TARGET.REDEMPTIONS
+WHERE member_id IS NULL;
+
+SELECT 'MISSING_TXN_ID' AS check_name, batch_id, member_id
+FROM TARGET.REDEMPTIONS
+WHERE txn_id IS NULL;
+
+SELECT 'INVALID_REDEMPTION_DATE' AS check_name, batch_id, member_id, txn_id
+FROM TARGET.REDEMPTIONS
+WHERE feed_date IS NULL OR txn_date IS NULL;
+
+SELECT 'TXN_AFTER_FEED_DATE' AS check_name, batch_id, member_id, txn_id, txn_date, feed_date
+FROM TARGET.REDEMPTIONS
+WHERE txn_date > feed_date;
+
+SELECT 'INVALID_MILES_REDEEMED' AS check_name, batch_id, member_id, txn_id, miles_redeemed
+FROM TARGET.REDEMPTIONS
+WHERE miles_redeemed IS NULL OR miles_redeemed < 0;
+
+SELECT 'INVALID_REDEMPTION_STATUS' AS check_name, batch_id, member_id, txn_id, status
+FROM TARGET.REDEMPTIONS
+WHERE status NOT IN ('COMPLETED', 'PENDING') OR status IS NULL;
+
+-- 19. Transaction IDs are the redemption business key in the supplied contract.
+SELECT 'DUPLICATE_TXN_ID' AS check_name, txn_id, COUNT(*) AS record_count
+FROM TARGET.REDEMPTIONS
+WHERE txn_id IS NOT NULL
+GROUP BY txn_id
+HAVING COUNT(*) > 1;
+
+-- 20. Duplicate logical records are retained and reported separately from
+-- duplicate IDs because a feed can repeat the same transaction payload.
+SELECT 'DUPLICATE_LOGICAL_REDEMPTION' AS check_name,
+      member_id, txn_id, txn_date, partner, miles_redeemed, status,
+      COUNT(*) AS record_count
+FROM TARGET.REDEMPTIONS
+GROUP BY member_id, txn_id, txn_date, partner, miles_redeemed, status
+HAVING COUNT(*) > 1;
+
+-- 21. Orphan redemptions remain in TARGET.REDEMPTIONS for investigation.
+SELECT 'ORPHAN_REDEMPTION_MEMBER' AS check_name,
+      redemption.batch_id, redemption.member_id, redemption.txn_id
+FROM TARGET.REDEMPTIONS AS redemption
+LEFT JOIN TARGET.CURRENT_MEMBER_RECORDS AS member
+   ON redemption.member_id = member.member_id
+WHERE member.member_id IS NULL;

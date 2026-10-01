@@ -29,3 +29,19 @@ COMMENT ON TABLE TARGET.CURRENT_MEMBER_RECORDS IS
     'One latest member record per source_member_id, before country routing.';
 COMMENT ON COLUMN TARGET.CURRENT_MEMBER_RECORDS.selection_reason IS
     'Latest flight date; ingestion/source metadata resolves equal-date records.';
+
+CREATE TABLE IF NOT EXISTS TARGET.REDEMPTIONS (
+    batch_id VARCHAR NOT NULL,
+    member_id VARCHAR,
+    feed_date DATE,
+    txn_id VARCHAR,
+    txn_date DATE,
+    partner VARCHAR,
+    miles_redeemed NUMBER,
+    status VARCHAR,
+    raw_feed_load_timestamp TIMESTAMP_NTZ,
+    flattened_timestamp TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+COMMENT ON TABLE TARGET.REDEMPTIONS IS
+    'One typed relational row per element of the redemption JSON redemptions array.';
