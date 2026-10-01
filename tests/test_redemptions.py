@@ -63,15 +63,23 @@ def test_missing_optional_partner_is_preserved_as_null():
 
 def test_missing_required_fields_are_reported():
     row = flatten_redemption_payload(
-        {"member_id": None, "feed_date": "20240115", "redemptions": [{"txn_id": None, "txn_date": "20240110", "miles_redeemed": 1, "status": "COMPLETED"}]}
+        {"member_id": None, "feed_date": "20240115", "redemptions": [{"txn_id": None, "txn_date": "20240110", "partner": "AeroLink", "miles_redeemed": 1, "status": "COMPLETED"}]}
     )[0]
 
     assert redemption_validation_errors(row) == {"missing_member_id", "missing_txn_id"}
 
 
+def test_missing_partner_is_reported_as_a_required_transaction_field():
+    row = flatten_redemption_payload(
+        {"member_id": "223457", "feed_date": "20240115", "redemptions": [{"txn_id": "RX1", "txn_date": "20240110", "partner": None, "miles_redeemed": 1, "status": "COMPLETED"}]}
+    )[0]
+
+    assert redemption_validation_errors(row) == {"missing_partner"}
+
+
 def test_invalid_date_and_numeric_values_are_reported():
     row = flatten_redemption_payload(
-        {"member_id": "223457", "feed_date": "20241315", "redemptions": [{"txn_id": "RX1", "txn_date": "bad", "miles_redeemed": "not-a-number", "status": "COMPLETED"}]}
+        {"member_id": "223457", "feed_date": "20241315", "redemptions": [{"txn_id": "RX1", "txn_date": "bad", "partner": "AeroLink", "miles_redeemed": "not-a-number", "status": "COMPLETED"}]}
     )[0]
 
     assert redemption_validation_errors(row) == {"invalid_feed_date", "invalid_txn_date", "invalid_miles_redeemed"}

@@ -153,6 +153,15 @@ SELECT 'MALFORMED_REDEMPTION_JSON' AS check_name, batch_id, source_file, raw_pay
 FROM RAW.REDEMPTION_FEEDS
 WHERE raw_payload IS NULL;
 
+SELECT 'MISSING_REDEMPTION_ROOT_FIELD' AS check_name, batch_id, source_file, raw_payload_text
+FROM RAW.REDEMPTION_FEEDS
+WHERE raw_payload IS NOT NULL
+   AND (
+         raw_payload:member_id IS NULL
+         OR raw_payload:feed_date IS NULL
+         OR TYPEOF(raw_payload:redemptions) <> 'ARRAY'
+   );
+
 -- 18. Required redemption fields and typed conversion checks.
 SELECT 'MISSING_REDEMPTION_MEMBER_ID' AS check_name, batch_id, txn_id
 FROM TARGET.REDEMPTIONS
@@ -161,6 +170,10 @@ WHERE member_id IS NULL;
 SELECT 'MISSING_TXN_ID' AS check_name, batch_id, member_id
 FROM TARGET.REDEMPTIONS
 WHERE txn_id IS NULL;
+
+SELECT 'MISSING_REDEMPTION_PARTNER' AS check_name, batch_id, member_id, txn_id
+FROM TARGET.REDEMPTIONS
+WHERE partner IS NULL;
 
 SELECT 'INVALID_REDEMPTION_DATE' AS check_name, batch_id, member_id, txn_id
 FROM TARGET.REDEMPTIONS

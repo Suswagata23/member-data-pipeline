@@ -45,6 +45,8 @@ def redemption_validation_errors(row: Mapping[str, Any]) -> set[str]:
         errors.add("missing_member_id")
     if not row.get("txn_id"):
         errors.add("missing_txn_id")
+    if not row.get("partner"):
+        errors.add("missing_partner")
     if row.get("feed_date") is None:
         errors.add("invalid_feed_date")
     if row.get("txn_date") is None:

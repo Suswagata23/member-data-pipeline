@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This project prepares member data from the supplied India, USA, and Australia files for a Snowflake pipeline. Phase 2 establishes a source-preserving raw layer, a typed staging layer, derived age and stale-member fields, and diagnostic data-quality checks.
+This project prepares member data from the supplied India, USA, and Australia files for a Snowflake pipeline. It implements source-preserving raw ingestion, typed staging with derived age and stale-member fields, deterministic latest-record country routing, redemption JSON flattening, member enrichment, and diagnostic data-quality checks.
 
 The source files are intentionally heterogeneous. The pipeline keeps source values in raw form so invalid data can be investigated and reprocessed instead of silently discarded.
 
@@ -154,14 +154,17 @@ Run the SQL scripts in this order:
 1. `sql/01_database_schema.sql`
 2. `sql/02_raw_ddl.sql`
 3. `sql/03_staging_ddl.sql`
-4. Load the supplied files into `RAW.MEMBER_RECORDS`, mapping country and source metadata while preserving source text.
-5. `sql/04_load_staging.sql`
-6. `sql/05_member_transformation.sql`
-7. Load redemption JSON into `RAW.REDEMPTION_FEEDS` using `TRY_PARSE_JSON` while retaining source text.
-8. `sql/06_redemption_flattening.sql`
-9. `sql/07_validations.sql`
+4. `sql/04_target_ddl.sql`
+5. Load the supplied files into `RAW.MEMBER_RECORDS`, mapping country and source metadata while preserving source text.
+6. `sql/04_load_staging.sql`
+7. `sql/05_member_transformation.sql`
+8. Load redemption JSON into `RAW.REDEMPTION_FEEDS` using `TRY_PARSE_JSON` while retaining source text.
+9. `sql/06_redemption_flattening.sql`
+10. `sql/07_validations.sql`
 
 The raw load step is intentionally kept separate because the inputs use CSV and XLSX formats with different headers and no Snowflake stage or credentials were supplied.
+
+Snowflake SQL was reviewed for object references, transformations, and consistency, but it has not been executed locally because no Snowflake connection is configured. The reported automated test results are Python unit-test results only.
 
 ## Testing
 
@@ -197,4 +200,6 @@ Snowflake SQL remains the primary implementation because the assessment is Snowf
 - Size or suspend/resume warehouses according to batch volume, and separate ingestion, transformation, and interactive workloads where needed.
 - Monitor row counts, rejected/malformed payloads, duplicate transaction IDs, orphan rates, and batch latency. Quarantine failed batches and retry from immutable RAW data.
 - Use incremental tasks or orchestration with success markers so a completed batch is not processed twice.
+
+See [docs/live_demo.md](docs/live_demo.md) for a 5-10 minute interview demonstration sequence.
 
