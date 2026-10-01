@@ -18,7 +18,11 @@ RAW.MEMBER_RECORDS
 STAGING.MEMBER_RECORDS
         |
         v
-future current-member and country targets
+TARGET.CURRENT_MEMBER_RECORDS
+        |
+        +--> TARGET.IND_MEMBERS
+        +--> TARGET.USA_MEMBERS
+        +--> TARGET.AUS_MEMBERS
 ```
 
 The assessment also requires:
@@ -45,7 +49,7 @@ A unified landing table for the three observed member feeds. Source date values 
 
 Contains typed dates, source-quality flags, `age`, and `stale_member`. The technical `member_key` is `source_country:source_member_id` because numeric IDs repeat across country files.
 
-Country-specific targets and current-state/latest-record logic are not included in this phase.
+`TARGET.CURRENT_MEMBER_RECORDS` contains one selected row per `source_member_id`. The country target tables are populated only from this current-state table.
 
 ## Transformation Logic
 
@@ -57,7 +61,23 @@ Country-specific targets and current-state/latest-record logic are not included 
 - `stale_member` is `TRUE` only when the flight date is more than 90 days before the calculation date.
 - Null or future flight dates produce `NULL` for `stale_member`, making the data issue visible.
 
-The future latest-record-wins rule is not implemented in Phase 2 because no globally stable member identifier exists in the supplied files.
+Latest-record-wins and country routing are implemented in Phase 3 using the explicit business-key assumption documented below.
+
+## Latest Record Wins
+
+Phase 3 applies the movement rule using `flight_date` as the business recency date:
+
+```text
+source_member_id = 101, IND, flight_date = 2024-01-10
+source_member_id = 101, USA, flight_date = 2025-06-20
+current state    = 101, USA
+```
+
+`ROW_NUMBER()` partitions by `source_member_id` and retains rank `1`. `DISTINCT` is insufficient because records for the same member can have different countries and dates.
+
+Equal flight dates are ordered by `load_timestamp`, then `source_file`, `source_row_number`, and `source_country`. The latter fields are ingestion metadata, not a claim that one country is business-preferred. They make a batch reproducible when no source sequence is provided. A future authoritative sequence should replace these fallback fields.
+
+The source files repeat IDs across countries, so this phase assumes the repeated numeric ID represents the same business member for the assessment's movement scenario. That assumption is visible in `sql/05_member_transformation.sql` and must be revisited if a global member identifier is supplied.
 
 ## Data Quality
 
@@ -99,7 +119,7 @@ The tests cover birthday-aware age, the strict stale threshold, null/future flig
 ## Assumptions
 
 - `IND`, `USA`, and `AUS` are derived from the supplied filenames because no source country column exists.
-- Numeric source IDs are not globally unique; Phase 2 uses a country-qualified technical key.
+- Numeric source IDs repeat across country files. Phase 2 uses a country-qualified technical staging key; Phase 3 uses `source_member_id` as the business key for the assessment's latest-record rule.
 - The assessment's required DOB field is treated as mandatory, so USA rows are surfaced as data-quality failures because their source has no DOB column.
 - The calculation date is Snowflake `CURRENT_DATE()` in the staging build.
 - Invalid and missing dates remain visible through raw columns and staging validity flags.
