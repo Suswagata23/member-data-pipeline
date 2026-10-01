@@ -13,3 +13,9 @@ connections.toml
 
 # Generated profiling/export files
 reports/
+
+# Proprietary assessment inputs; keep local and out of Git
+/AUS.xlsx
+/DE_Assessment_file.pdf
+/IND(in).csv
+/USA(in).csv
